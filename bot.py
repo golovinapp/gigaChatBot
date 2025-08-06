@@ -2,14 +2,16 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from langchain_community.chat_models import GigaChat
+from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
 import os
+import uuid
 
 # Загрузка переменных из файла .env
 load_dotenv()
 
 # Получение токенов и данных из переменных окружения
-GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY").strip()  # Authorization key из личного кабинета
+GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY").strip()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # Проверка, что токены загружены
@@ -26,26 +28,50 @@ logger = logging.getLogger(__name__)
 try:
     giga = GigaChat(
         credentials=GIGACHAT_AUTH_KEY,
-        scope="GIGACHAT_API_PERS",  # Указываем scope, как в статье
-        verify_ssl_certs=False  # Отключаем проверку SSL для тестирования
+        scope="GIGACHAT_API_PERS",
+        verify_ssl_certs=False
     )
     logger.info("GigaChat клиент успешно инициализирован")
 except Exception as e:
     logger.error(f"Ошибка инициализации GigaChat: {e}")
     raise
 
+# Хранилище истории чата (ключ - chat_id, значение - список сообщений)
+chat_history = {}
+
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    chat_history[chat_id] = []  # Инициализация истории для нового чата
     await update.message.reply_text("Привет! Я бот, использующий GigaChat. Напиши мне что-нибудь, и я отвечу!")
 
 # Обработка текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     user_message = update.message.text
+
+    # Инициализация истории для чата, если ее нет
+    if chat_id not in chat_history:
+        chat_history[chat_id] = []
+
+    # Добавление нового сообщения пользователя в историю
+    chat_history[chat_id].append(HumanMessage(content=user_message))
+    logger.info(f"Получено сообщение в чате {chat_id}: {user_message}")
+
     try:
-        logger.info(f"Получено сообщение: {user_message}")
-        response = giga.invoke(user_message)  # Отправка сообщения в GigaChat
-        logger.info(f"Ответ от GigaChat: {response}")
-        await update.message.reply_text(str(response.content))
+        # Генерация уникального X-Session-ID для сессии
+        session_id = str(uuid.uuid4())
+
+        # Передача истории и нового сообщения в GigaChat
+        messages = chat_history[chat_id].copy()
+        response = giga.invoke(messages)
+
+        # Добавление ответа модели в историю
+        chat_history[chat_id].append(AIMessage(content=response.content))
+        logger.info(f"Ответ от GigaChat: {response.content}")
+
+        await update.message.reply_text(response.content)
+
     except Exception as e:
         logger.error(f"Ошибка при запросе к GigaChat: {e}")
         await update.message.reply_text("Извини, произошла ошибка при обращении к GigaChat.")
