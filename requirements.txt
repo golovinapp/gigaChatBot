@@ -1,0 +1,4 @@
+langchain-gigachat
+langchain-community
+python-telegram-bot
+python-dotenv

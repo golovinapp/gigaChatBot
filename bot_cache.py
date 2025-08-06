@@ -1,10 +1,8 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from langchain_community.chat_models import GigaChat
+from langchain_gigachat import GigaChat
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain.globals import set_llm_cache
-from langchain.cache import InMemoryCache
 from dotenv import load_dotenv
 import os
 import uuid
@@ -15,13 +13,11 @@ load_dotenv()
 # Получение токенов и данных из переменных окружения
 GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY").strip()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GIGACHAT_SCOPE = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")  # Значение по умолчанию, если не указано
 
 # Проверка, что токены загружены
 if not GIGACHAT_AUTH_KEY or not TELEGRAM_TOKEN:
     raise ValueError("Не удалось загрузить GIGACHAT_AUTH_KEY или TELEGRAM_TOKEN из файла .env")
-
-# Настройка кеширования
-set_llm_cache(InMemoryCache())  # Включаем кеширование в памяти
 
 # Настройка логирования
 logging.basicConfig(
@@ -33,7 +29,7 @@ logger = logging.getLogger(__name__)
 try:
     giga = GigaChat(
         credentials=GIGACHAT_AUTH_KEY,
-        scope="GIGACHAT_API_PERS",
+        scope=GIGACHAT_SCOPE,
         verify_ssl_certs=False
     )
     logger.info("GigaChat клиент успешно инициализирован")
@@ -41,40 +37,55 @@ except Exception as e:
     logger.error(f"Ошибка инициализации GigaChat: {e}")
     raise
 
-# Хранилище истории чата (ключ - chat_id, значение - список сообщений)
-chat_history = {}
+# Хранилище данных чата (ключ - chat_id, значение - список сообщений)
+chat_data = {}  # Ключ - chat_id, значение - {messages: [], session_id: None}
+
+# Хранилище кастомного кэша (ключ - нормализованное сообщение, значение - ответ)
+custom_cache = {}
 
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    chat_history[chat_id] = []  # Инициализация истории для нового чата
+    session_id = str(uuid.uuid4())  # Генерируем уникальный X-Session-ID для чата
+    chat_data[chat_id] = {"messages": [], "session_id": session_id}
     await update.message.reply_text("Привет! Я бот, использующий GigaChat. Напиши мне что-нибудь, и я отвечу!")
 
 # Обработка текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_message = update.message.text
+    user_message = update.message.text.lower()  # Нормализация для поиска
 
-    # Инициализация истории для чата, если ее нет
-    if chat_id not in chat_history:
-        chat_history[chat_id] = []
+    # Инициализация данных для чата, если их нет
+    if chat_id not in chat_data:
+        chat_data[chat_id] = {"messages": [], "session_id": str(uuid.uuid4())}
 
     # Добавление нового сообщения пользователя в историю
-    chat_history[chat_id].append(HumanMessage(content=user_message))
+    chat_data[chat_id]["messages"].append(HumanMessage(content=user_message))
     logger.info(f"Получено сообщение в чате {chat_id}: {user_message}")
 
     try:
-        # Генерация уникального X-Session-ID для сессии
-        session_id = str(uuid.uuid4())
-
         # Передача истории и нового сообщения в GigaChat
-        messages = chat_history[chat_id].copy()
+        messages = chat_data[chat_id]["messages"].copy()
         logger.info(f"Отправка сообщений в GigaChat: {messages}")
-        response = giga.invoke(messages)
+
+        if user_message in custom_cache:
+            response = AIMessage(content=custom_cache[user_message])
+            logger.info(f"Ответ из кастомного кэша: {response.content}")
+        else:
+            # Создаем новый экземпляр с текущим X-Session-ID
+            giga_session = GigaChat(
+                credentials=GIGACHAT_AUTH_KEY,
+                scope=GIGACHAT_SCOPE,
+                verify_ssl_certs=False,
+                extra_headers={"X-Session-ID": chat_data[chat_id]["session_id"]}
+            )
+            response = giga_session.invoke(messages)
+            custom_cache[user_message] = response.content  # Кэшируем ответ
+            logger.info(f"Ответ от GigaChat (новый): {response.content}")
 
         # Добавление ответа модели в историю
-        chat_history[chat_id].append(AIMessage(content=response.content))
-        logger.info(f"Ответ от GigaChat: {response.content}")
+        chat_data[chat_id]["messages"].append(AIMessage(content=response.content))
+        logger.info(f"Обновленная история: {chat_data[chat_id]['messages']}")
 
         await update.message.reply_text(response.content)
 
