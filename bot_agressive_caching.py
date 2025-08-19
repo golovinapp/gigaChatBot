@@ -11,9 +11,15 @@ import uuid
 load_dotenv()
 
 # Получение токенов и данных из переменных окружения
-GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY").strip()
+GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GIGACHAT_SCOPE = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")  # Значение по умолчанию, если не указано
+
+# Удаляем лишние пробелы, если переменные заданы
+if GIGACHAT_AUTH_KEY:
+    GIGACHAT_AUTH_KEY = GIGACHAT_AUTH_KEY.strip()
+if TELEGRAM_TOKEN:
+    TELEGRAM_TOKEN = TELEGRAM_TOKEN.strip()
 
 # Проверка, что токены загружены
 if not GIGACHAT_AUTH_KEY or not TELEGRAM_TOKEN:
